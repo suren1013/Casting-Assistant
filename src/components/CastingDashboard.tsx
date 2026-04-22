@@ -798,9 +798,6 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
 
           {/* Right Column: Predictions & Alerts */}
           <aside className="border-l border-zinc-800 p-4 flex flex-col bg-zinc-950/50 overflow-y-auto print:hidden">
-            <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-4 border-b border-zinc-800 pb-2 flex items-center gap-2">
-               <AlertTriangle className="w-3 h-3 text-amber-500" /> Failure Analysis
-            </h3>
             
             <div className="space-y-3 mb-8">
               {designResults.failures.length > 0 && designResults.failures.map(fail => (
@@ -833,27 +830,6 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
                 </div>
               ))}
               
-              <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-lg shadow-sm space-y-2">
-                 <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest border-b border-zinc-800/50 pb-1 mb-2">Technical Validation</h4>
-                 <div className="flex justify-between items-center text-[10px] font-mono">
-                   <span className="text-zinc-500">Feeding distance check:</span>
-                   <span className={designResults.analysis.fdRisk ? "text-amber-500 font-bold" : "text-emerald-500 font-bold"}>
-                     {designResults.analysis.fdRisk ? "RISK" : "PASS"}
-                   </span>
-                 </div>
-                 <div className="flex justify-between items-center text-[10px] font-mono">
-                   <span className="text-zinc-500">Modulus ratio:</span>
-                   <span className={designResults.status === 'fail' ? "text-red-400" : designResults.status === 'borderline' ? "text-amber-400" : "text-emerald-400"}>
-                     {designResults.analysis.currentRatioSq.toFixed(2)} → {designResults.status}
-                   </span>
-                 </div>
-                 <div className="flex justify-between items-center text-[10px] font-mono">
-                   <span className="text-zinc-500">Directional solidification:</span>
-                   <span className={designResults.analysis.currentRatioSq >= 1.0 && !designResults.analysis.fdRisk ? "text-emerald-500 font-bold" : "text-red-500 font-bold"}>
-                     {designResults.analysis.currentRatioSq >= 1.0 && !designResults.analysis.fdRisk ? "SATISFIED" : "NOT SATISFIED"}
-                   </span>
-                 </div>
-              </div>
             </div>
 
             <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-4 border-b border-zinc-800 pb-2 flex items-center gap-2">
