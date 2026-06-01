@@ -43,67 +43,163 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import RiserSchematic3D from './RiserSchematic3D';
 
-// --- Types ---
+// --- Alloy Database ---
+export type AlloyType = 'castIron' | 'ductileIron' | 'carbonSteel' | 'stainlessSteel' | 'aluminumA356' | 'bronze';
 
-type ShapeType = 'cube' | 'plate' | 'cylinder';
+export const ALLOY_DATA: Record<AlloyType, { name: string, shrinkage: number, modulusFactor: number, feedingDistanceFactor: number, freezingRange: 'Wide' | 'Narrow', defaultTemp: number, density: number, costPerKg: number }> = {
+  castIron: { name: 'Cast Iron', shrinkage: 1.5, modulusFactor: 1.1, feedingDistanceFactor: 1.1, freezingRange: 'Narrow', defaultTemp: 1350, density: 7.2, costPerKg: 100 },
+  ductileIron: { name: 'Ductile Iron', shrinkage: 2.0, modulusFactor: 1.15, feedingDistanceFactor: 1.0, freezingRange: 'Narrow', defaultTemp: 1400, density: 7.1, costPerKg: 120 },
+  carbonSteel: { name: 'Carbon Steel', shrinkage: 2.5, modulusFactor: 1.25, feedingDistanceFactor: 1.0, freezingRange: 'Wide', defaultTemp: 1550, density: 7.85, costPerKg: 60 },
+  stainlessSteel: { name: 'Stainless Steel', shrinkage: 3.0, modulusFactor: 1.3, feedingDistanceFactor: 0.9, freezingRange: 'Wide', defaultTemp: 1600, density: 8.0, costPerKg: 180 },
+  aluminumA356: { name: 'Aluminum A356', shrinkage: 1.3, modulusFactor: 1.15, feedingDistanceFactor: 1.2, freezingRange: 'Narrow', defaultTemp: 700, density: 2.67, costPerKg: 250 },
+  bronze: { name: 'Bronze', shrinkage: 1.6, modulusFactor: 1.2, feedingDistanceFactor: 1.1, freezingRange: 'Wide', defaultTemp: 1100, density: 8.8, costPerKg: 600 }
+};
 
-interface DesignParams {
+export type ShapeType = 'plate' | 'cylinder' | 'block' | 'ribbedPlate' | 'bossedCasting' | 'complexJunction';
+
+export interface DesignParams {
   shape: ShapeType;
-  a: number; // for cube
-  l: number; // for plate
-  w: number; // for plate
-  t: number; // for plate/thickness
-  d: number; // for cylinder
-  h: number; // for cylinder
-  safetyFactor: number;
-  riserOverrideFactor: number; // 0.5 to 2.0
-  density: number;
-  costPerKg: number; // Dynamic price based on material
-  isCustomMaterial?: boolean; // tracks if custom is selected
+  l: number; 
+  w: number; 
+  t: number; 
+  d: number; 
+  h: number; 
+  thickestSection: number;
+  thinnestSection: number;
+  alloy: AlloyType;
+  pouringTemperature: number;
+  moldType: 'greenSand' | 'resinSand' | 'shellMold' | 'investment';
+  orientation: 'horizontal' | 'vertical' | 'inclined';
+  riserType: 'open' | 'blind' | 'side' | 'top' | 'insulated' | 'exothermic';
+  neckDiameter: number; 
+  neckLength: number; 
+  useChills: boolean;
+  chillType: 'external' | 'internal';
+  qualityClass: 'general' | 'industrial' | 'automotive' | 'aerospace';
+  riserOverrideFactor: number; 
+  shrinkageAllowance: number; 
+  machiningAllowance: number; 
+  draftAllowance: number;
 }
 
 // --- Logic Helpers ---
 
 const calculateCasting = (params: DesignParams) => {
+  const addAllowances = (dim: number) => {
+    const d = Number(dim) || 0;
+    const m = Number(params.machiningAllowance) || 0;
+    const dr = Number(params.draftAllowance) || 0;
+    const s = Number(params.shrinkageAllowance) || 0;
+    return (d + m + dr) * (1 + s / 100);
+  };
+
   let volume = 0;
   let area = 0;
-  let thickness = 0;
+  let thickness = params.t;
+
+  const l_p = addAllowances(params.l);
+  const w_p = addAllowances(params.w);
+  const t_p = addAllowances(params.t);
+  const d_p = addAllowances(params.d);
+  const h_p = addAllowances(params.h);
 
   switch (params.shape) {
-    case 'cube':
-      volume = Math.pow(params.a, 3);
-      area = 6 * Math.pow(params.a, 2);
-      thickness = params.a;
+    case 'block':
+      volume = l_p * w_p * t_p;
+      area = 2 * (l_p * w_p + w_p * t_p + l_p * t_p);
+      thickness = Math.min(l_p, w_p, t_p);
       break;
     case 'plate':
-      volume = params.l * params.w * params.t;
-      area = 2 * (params.l * params.w + params.w * params.t + params.l * params.t);
-      thickness = params.t;
+      volume = l_p * w_p * t_p;
+      area = 2 * (l_p * w_p + w_p * t_p + l_p * t_p);
+      thickness = t_p;
       break;
     case 'cylinder':
-      volume = (Math.PI / 4) * Math.pow(params.d, 2) * params.h;
-      area = Math.PI * params.d * params.h + (Math.PI / 2) * Math.pow(params.d, 2);
-      thickness = Math.min(params.d, params.h);
+      volume = (Math.PI / 4) * Math.pow(d_p, 2) * h_p;
+      area = Math.PI * d_p * h_p + (Math.PI / 2) * Math.pow(d_p, 2);
+      thickness = Math.min(d_p, h_p);
+      break;
+    case 'ribbedPlate':
+      volume = l_p * w_p * t_p * 0.8;
+      area = 2 * (l_p * w_p + w_p * t_p + l_p * t_p) * 1.5;
+      thickness = t_p;
+      break;
+    case 'bossedCasting':
+      volume = l_p * w_p * t_p * 1.1;
+      area = 2 * (l_p * w_p + w_p * t_p + l_p * t_p) * 1.1;
+      thickness = t_p;
+      break;
+    case 'complexJunction':
+      volume = l_p * w_p * t_p * 0.9;
+      area = 2 * (l_p * w_p + w_p * t_p + l_p * t_p) * 1.3;
+      thickness = t_p;
       break;
   }
 
-  const modulus = volume / area;
-  return { volume, area, modulus, thickness };
+  const modulus = area > 0 ? (volume / area) : 0;
+  return { volume, area, modulus, thickness, l_p, w_p, t_p, d_p, h_p };
 };
 
-const calculateRiser = (cModulus: number, safetyFactor: number, overrideFactor: number) => {
-  const reqModulus = cModulus * safetyFactor;
-  // Standard Riser (H=D) Modulus = D/6
+const calculateRiser = (cModulus: number, params: DesignParams, baseVolume: number) => {
+  const cm = Number(cModulus) || 0.001; 
+  
+  const qualityFactorDict = {
+    general: 1.05,
+    industrial: 1.10,
+    automotive: 1.20,
+    aerospace: 1.30
+  };
+  const safetyFactor = qualityFactorDict[params.qualityClass] || 1.1;
+
+  const alloy = ALLOY_DATA[params.alloy];
+  
+  // Pouring temp adjustment
+  const tempDiff = params.pouringTemperature - alloy.defaultTemp;
+  const tempModulusMultiplier = tempDiff >= 50 ? 1.05 : 1.0;
+
+  let reqModulus = cm * alloy.modulusFactor * safetyFactor * tempModulusMultiplier;
+  if(params.useChills) {
+      reqModulus *= 0.9; // 10% reduction
+  }
+  
+  const of = Number(params.riserOverrideFactor) || 1.0;
+
+  // Standard Riser Modulus
   const baseDiameter = 6 * reqModulus;
-  const actualDiameter = baseDiameter * overrideFactor;
-  const actualHeight = actualDiameter; // assuming H=D for simplicity
-  const actualVolume = (Math.PI / 4) * Math.pow(actualDiameter, 2) * actualHeight;
+  const actualDiameter = baseDiameter * of;
+  const actualHeight = actualDiameter; 
+  
+  const orientationEff: Record<string, number> = {
+    horizontal: 1.0,
+    vertical: 1.1,
+    inclined: 1.05
+  };
+  const eff = orientationEff[params.orientation] || 1.0;
+
+  const reqRiserVolRaw = baseVolume / eff;
+  const reqRiserVol = params.useChills ? reqRiserVolRaw * 0.9 : reqRiserVolRaw;
+
+  let actualVolume = (Math.PI / 4) * Math.pow(actualDiameter, 2) * actualHeight;
+
   const actualArea = Math.PI * actualDiameter * actualHeight + (Math.PI / 2) * Math.pow(actualDiameter, 2);
-  const actualModulus = actualVolume / actualArea;
+  const actualModulusRaw = actualArea > 0 ? (actualVolume / actualArea) : 0;
+
+  const riserEff: Record<string, number> = {
+    open: 1.0,
+    blind: 1.15,
+    side: 0.95,
+    top: 1.1,
+    insulated: 1.25,
+    exothermic: 1.35
+  };
+  const rEff = riserEff[params.riserType] || 1.0;
+
+  const effectiveRiserModulus = actualModulusRaw * rEff;
 
   return { 
     requiredModulus: reqModulus, 
@@ -111,23 +207,22 @@ const calculateRiser = (cModulus: number, safetyFactor: number, overrideFactor: 
     actualDiameter, 
     actualHeight, 
     actualVolume, 
-    actualModulus 
+    actualModulus: effectiveRiserModulus,
+    safetyFactor
   };
 };
 
-const getStatus = (cModulus: number, rModulus: number) => {
-  const cModSq = Math.pow(cModulus, 2);
-  const rModSq = Math.pow(rModulus, 2);
-  
-  if (rModSq > 1.1 * cModSq) return 'safe';
-  if (rModSq >= cModSq) return 'borderline';
+const getStatus = (reqModulus: number, effectiveRiserModSq: number, reqModulusSq: number) => {
+  if (effectiveRiserModSq > 1.1 * reqModulusSq) return 'safe';
+  if (effectiveRiserModSq >= reqModulusSq) return 'borderline';
   return 'fail';
 };
 
 interface AIInsights {
-  failureAnalysis: string;
-  designAdvice: string;
-  recommendation: string;
+  feedingAnalysis: string;
+  defectPrediction: string;
+  costImpact: string;
+  recommendations: string[];
 }
 
 // --- Main Component ---
@@ -135,17 +230,27 @@ interface AIInsights {
 export default function CastingDashboard() {
   const [params, setParams] = useState<DesignParams>({
     shape: 'plate',
-    a: 100,
     l: 300,
     w: 200,
     t: 20,
     d: 100,
     h: 150,
-    safetyFactor: 1.2,
+    thickestSection: 20,
+    thinnestSection: 20,
+    alloy: 'carbonSteel',
+    pouringTemperature: 1550,
+    moldType: 'greenSand',
+    orientation: 'horizontal',
+    riserType: 'blind',
+    neckDiameter: 0,
+    neckLength: 0,
+    useChills: false,
+    chillType: 'external',
+    qualityClass: 'industrial',
     riserOverrideFactor: 1.0,
-    density: 7.85, // g/cm3 for steel
-    costPerKg: 60, // INR/kg for steel
-    isCustomMaterial: false
+    shrinkageAllowance: 2.5,
+    machiningAllowance: 3.0,
+    draftAllowance: 1.0
   });
 
   const [showExplanation, setShowExplanation] = useState(false);
@@ -163,66 +268,114 @@ export default function CastingDashboard() {
   // Derived calculations
   const designResults = useMemo(() => {
     const casting = calculateCasting(params);
-    const riser = calculateRiser(casting.modulus, params.safetyFactor, params.riserOverrideFactor);
-    const yieldPercentage = (casting.volume / (casting.volume + riser.actualVolume)) * 100;
-    const status = getStatus(casting.modulus, riser.actualModulus);
+    const alloy = ALLOY_DATA[params.alloy];
+    const riser = calculateRiser(casting.modulus, params, casting.volume);
     
-    // Optimal point estimation (where ratio is just passing `~1.1x`)
+    // Total Volume accounting for mould type (mock computation of actual cooling effect)
+    const moldCoolFlow = { greenSand: 1.0, resinSand: 0.95, shellMold: 0.85, investment: 0.80 }[params.moldType] || 1.0;
+    
+    const totalVol = casting.volume + riser.actualVolume;
+    const yieldPercentage = totalVol > 0 ? (casting.volume / totalVol) * 100 : 0;
+    
+    const reqModSq = Math.pow(riser.requiredModulus, 2);
+    const effModSq = Math.pow(riser.actualModulus, 2);
+    const status = getStatus(reqModSq, effModSq, reqModSq);
+    
+    // Hotspot Evaluation
+    const thicknessVariation = params.thickestSection > 0 ? ((params.thickestSection - params.thinnestSection) / params.thickestSection) * 100 : 0;
+    let baseRisk = thicknessVariation;
+    if (params.shape === 'bossedCasting') baseRisk += 20;
+    if (params.shape === 'complexJunction') baseRisk += 25;
+    if (params.orientation === 'horizontal') baseRisk += 10;
+    if (alloy.freezingRange === 'Wide') baseRisk += 10;
+    const tempDiff = params.pouringTemperature - alloy.defaultTemp;
+    if (tempDiff >= 50) baseRisk += 10;
+    if (params.useChills) baseRisk -= 20;
+    const hotspotScore = Math.min(100, Math.max(0, baseRisk));
+
+    // Feeding Distance
+    const feedingDistance = params.thickestSection * alloy.feedingDistanceFactor * 4;
+    const longestSection = Math.max(casting.l_p, casting.w_p, casting.d_p || 0);
+    const reqRiserCount = Math.ceil(longestSection / (feedingDistance || 1));
+    const fdRisk = longestSection > feedingDistance;
+
+    // Optimal point estimation
     let optFactor = params.riserOverrideFactor;
-    let fallbackRiser = riser;
-    const currentRatioSq = Math.pow(riser.actualModulus / casting.modulus, 2);
+    const ratioSq = reqModSq > 0 ? (effModSq / reqModSq) : 0;
     
     // We only shrink if we're well above safe.
-    if (currentRatioSq > 1.1) {
-      // Find the theoretical override factor that gives exactly M_r^2 = 1.1 * M_c^2
-      // baseDiameter * optFactor = required actualDiameter
-      // -> Modulus is proportional to diameter.
-      optFactor = params.riserOverrideFactor * Math.sqrt(1.1 / currentRatioSq);
-      // Give it a tiny 1% buffer
+    if (ratioSq > 1.1 && ratioSq !== Infinity) {
+      optFactor = params.riserOverrideFactor * Math.sqrt(1.1 / ratioSq);
       optFactor *= 1.01;
     }
     
-    // Evaluate smart-step optimized design:
-    const smartStep = currentRatioSq > 1.3 ? 0.9 : 0.97; // 10% vs 3% reduction
+    const smartStep = ratioSq > 1.3 ? 0.9 : 0.97;
     const stepFactor = params.riserOverrideFactor * smartStep;
     
-    const optimizedRiser = calculateRiser(casting.modulus, params.safetyFactor, optFactor);
-    const optimizedYield = (casting.volume / (casting.volume + optimizedRiser.actualVolume)) * 100;
-    const optimizedStatus = getStatus(casting.modulus, optimizedRiser.actualModulus);
+    const optimizedRiser = calculateRiser(casting.modulus, { ...params, riserOverrideFactor: optFactor }, casting.volume);
+    const totalOptVol = casting.volume + optimizedRiser.actualVolume;
+    const optimizedYield = totalOptVol > 0 ? (casting.volume / totalOptVol) * 100 : 0;
+    const optimizedStatus = getStatus(Math.pow(optimizedRiser.requiredModulus, 2), Math.pow(optimizedRiser.actualModulus, 2), Math.pow(optimizedRiser.requiredModulus, 2));
 
-    // Baseline stats for improvement calculations
-    const initialRiser = calculateRiser(casting.modulus, params.safetyFactor, 1.0);
-    const initialYield = (casting.volume / (casting.volume + initialRiser.actualVolume)) * 100;
+    const initialRiser = calculateRiser(casting.modulus, { ...params, riserOverrideFactor: 1.0 }, casting.volume);
+    const totalInitVol = casting.volume + initialRiser.actualVolume;
+    const initialYield = totalInitVol > 0 ? (casting.volume / totalInitVol) * 100 : 0;
 
-    // Checks
-    const fdRisk = params.shape === 'plate' ? params.l > 4.5 * params.t : params.shape === 'cylinder' ? params.h > 4.5 * params.d : false;
-    
-    // Cost estimation
     const excessVolume = Math.max(0, riser.actualVolume - optimizedRiser.actualVolume);
-    const materialWastedKg = (excessVolume * params.density) / 1000;
-    const estimatedExtraCost = materialWastedKg * params.costPerKg;
+    const materialWastedKg = (excessVolume * alloy.density) / 1000;
+    const estimatedExtraCost = materialWastedKg * alloy.costPerKg;
 
-    // Auto Riser Selection
-    const recommendedRiserType = casting.thickness < 30 ? 'Open Riser' : 'Blind Riser';
+    // Riser Neck Logic
+    const autoNeckDia = riser.actualDiameter * 0.35;
+    const autoNeckLen = riser.actualDiameter * 0.50;
+    const actualNeckDia = params.neckDiameter > 0 ? params.neckDiameter : autoNeckDia;
+    const actualNeckLen = params.neckLength > 0 ? params.neckLength : autoNeckLen;
+    const neckRatio = actualNeckDia / riser.actualDiameter;
 
-    // Failure Predictions
+    // Design Health (0-100)
+    let health = 100;
+    health -= (hotspotScore * 0.25);
+    if(fdRisk) health -= 25;
+    if(ratioSq < 1.0) health -= 20; // Riser fails to feed
+    if(yieldPercentage < 50) health -= 15;
+    if(neckRatio < 0.25) health -= 10;
+    health = Math.max(0, Math.min(100, health));
+
     const failures = [];
-    if (params.shape === 'plate' && params.t < 15) {
+    if (thicknessVariation > 40) {
       failures.push({
-        id: 'shrinkage',
-        title: 'Centerline Shrinkage risk',
-        desc: 'Plate thickness below 15mm often leads to premature solidification in the center.',
-        suggestion: 'Increase casting thickness or ensure adequate riser volume.',
+        id: 'hotspot_var',
+        title: 'High Hotspot Probability',
+        desc: `Thickness variation is ${thicknessVariation.toFixed(0)}%.`,
+        suggestion: 'Additional feeding analysis recommended.',
         type: 'warning'
       });
     }
-    if (params.shape === 'cube' && yieldPercentage > 85) {
+    if(fdRisk && params.shape !== 'block') {
       failures.push({
-        id: 'hotspot',
-        title: 'Hotspot Alert',
-        desc: 'High yield in cubic geometries risks internal shrinkage cavities.',
-        suggestion: 'Review riser placement and ensure sufficient riser modulus.',
-        type: 'critical'
+        id: 'feeding_dist',
+        title: 'Feeding Distance Exceeded',
+        desc: `Longest path (${longestSection.toFixed(0)}mm) > alloy feed distance (${feedingDistance.toFixed(0)}mm).`,
+        suggestion: `Single riser insufficient. Recommend ${reqRiserCount} risers.`,
+        type: 'warning'
+      });
+    }
+    if (neckRatio < 0.25) {
+      failures.push({
+        id: 'neck_freeze',
+        title: 'Neck Freeze Risk',
+        desc: 'Neck diameter < 25% of riser diameter.',
+        suggestion: 'Neck may freeze before casting. Increase neck thickness.',
+        type: 'warning'
+      });
+    }
+    if (neckRatio > 0.50) {
+       failures.push({
+        id: 'neck_yield',
+        title: 'Yield Loss Risk',
+        desc: 'Neck diameter > 50% of riser diameter.',
+        suggestion: 'Excess metal yield loss and machining cost.',
+        type: 'warning'
       });
     }
 
@@ -231,7 +384,14 @@ export default function CastingDashboard() {
       riser,
       yieldPercentage,
       status,
-      recommendedRiserType,
+      thicknessVariation,
+      hotspotScore,
+      feedingDistance,
+      longestSection,
+      reqRiserCount,
+      neck: { dia: actualNeckDia, len: actualNeckLen, ratio: neckRatio },
+      health,
+      recommendedRiserType: 'Blind Riser', // legacy support
       failures,
       optimized: {
         yield: optimizedYield,
@@ -242,10 +402,11 @@ export default function CastingDashboard() {
       },
       baseline: { yield: initialYield },
       analysis: {
-        currentRatioSq,
+        currentRatioSq: ratioSq,
         fdRisk,
         materialWastedKg,
-        estimatedExtraCost
+        estimatedExtraCost,
+        tempMult: params.pouringTemperature - ALLOY_DATA[params.alloy].defaultTemp >= 50 ? 1.05 : 1.0
       }
     };
   }, [params]);
@@ -257,61 +418,74 @@ export default function CastingDashboard() {
     }
   }, [designResults.status, params.riserOverrideFactor]);
 
-  // AI Insights Fetching
-  useEffect(() => {
-    if (!ai) return;
+  const [lastAnalyzedParamsHash, setLastAnalyzedParamsHash] = useState<string | null>(null);
+  const [aiAnalysisStatus, setAiAnalysisStatus] = useState<'Not Generated' | 'Cached' | 'Fresh Analysis'>('Not Generated');
 
-    const fetchAIInsights = async () => {
-      setIsAILoading(true);
-      try {
-        const prompt = `As a casting foundry expert, analyze this design:
-Geometry: ${params.shape} (${params.shape === 'cube' ? `a=${params.a}` : params.shape === 'plate' ? `L=${params.l}, W=${params.w}, T=${params.t}` : `D=${params.d}, H=${params.h}`})
-Density: ${params.density} g/cm3
+  // Generate AI Insights on-demand
+  const generateAIReview = async (forceRegenerate = false) => {
+    if (!ai) return;
+    
+    const currentHash = JSON.stringify(params);
+    
+    // Use cache if not forcefully regenerating and params haven't changed
+    if (!forceRegenerate && currentHash === lastAnalyzedParamsHash && aiInsights) {
+      setAiAnalysisStatus('Cached');
+      return;
+    }
+
+    setIsAILoading(true);
+    setAiAnalysisStatus('Fresh Analysis');
+    
+    try {
+      const prompt = `As a casting foundry expert, analyze this design:
+Geometry: ${params.shape} (${params.l}x${params.w}x${params.t} mm)
+Thickest: ${params.thickestSection}mm, Thinnest: ${params.thinnestSection}mm
+Alloy: ${ALLOY_DATA[params.alloy].name} (Density: ${ALLOY_DATA[params.alloy].density} g/cm3)
+Pouring Temp: ${params.pouringTemperature}°C, Orientation: ${params.orientation}
+Riser Type: ${params.riserType}, Chills: ${params.useChills ? params.chillType : 'None'}
 Yield: ${designResults.yieldPercentage.toFixed(1)}%
 Status: ${designResults.status}
-Calculated M_c: ${designResults.casting.modulus.toFixed(2)}
-Calculated M_r: ${designResults.riser.actualModulus.toFixed(2)}
-Recommended Riser: ${designResults.recommendedRiserType}
+Hotspot Score: ${designResults.hotspotScore.toFixed(0)}
+Health Score: ${designResults.health.toFixed(0)}
 
 Provide:
-1. Short failure analysis (max 15 words)
-2. Design advice based on data (max 15 words)
-3. Riser type/size recommendation (max 15 words)
+1. Feeding Analysis: Explain why this riser strategy works or fails based on the alloy and geometry. (max 20 words)
+2. Defect Prediction: Predict Shrinkage Risk, Porosity Risk, Hotspot Risk. (max 20 words)
+3. Cost Impact: Estimate Yield % realism and Metal Loss. (max 20 words)
+4. Recommendations: 2 specific string recommendations (e.g., "Switching to blind riser would reduce volume by 12%").
 
-Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
+Return ONLY JSON with keys: feedingAnalysis, defectPrediction, costImpact, recommendations.`;
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                failureAnalysis: { type: Type.STRING },
-                designAdvice: { type: Type.STRING },
-                recommendation: { type: Type.STRING },
-              },
-              required: ["failureAnalysis", "designAdvice", "recommendation"]
-            }
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              feedingAnalysis: { type: Type.STRING },
+              defectPrediction: { type: Type.STRING },
+              costImpact: { type: Type.STRING },
+              recommendations: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+            required: ["feedingAnalysis", "defectPrediction", "costImpact", "recommendations"]
           }
-        });
-
-        const resultText = response.text;
-        if (resultText) {
-          const parsed = JSON.parse(resultText);
-          setAIInsights(parsed);
         }
-      } catch (error) {
-        console.error("AI Insight Error:", error);
-      } finally {
-        setIsAILoading(false);
-      }
-    };
+      });
 
-    const timer = setTimeout(fetchAIInsights, 1500); // Debounce AI calls
-    return () => clearTimeout(timer);
-  }, [ai, params, designResults]);
+      const resultText = response.text;
+      if (resultText) {
+        const parsed = JSON.parse(resultText);
+        setAIInsights(parsed);
+        setLastAnalyzedParamsHash(currentHash);
+      }
+    } catch (error) {
+      console.error("AI Insight Error:", error);
+    } finally {
+      setIsAILoading(false);
+    }
+  };
 
   // Chart Data: Simulating solidification curve
   // t = k * (V/A)^2 = k * M^2
@@ -339,27 +513,49 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
   }, [designResults]);
 
   const handleInputChange = (key: keyof DesignParams, value: any) => {
+    let safeValue = Array.isArray(value) ? value[0] : value;
+    
+    const numericFields: (keyof DesignParams)[] = [
+      'l', 'w', 't', 'd', 'h', 'thickestSection', 'thinnestSection',
+      'pouringTemperature', 'neckDiameter', 'neckLength',
+      'riserOverrideFactor', 'shrinkageAllowance', 'machiningAllowance', 'draftAllowance'
+    ];
+    
+    if (numericFields.includes(key)) {
+      const num = parseFloat(safeValue);
+      safeValue = isNaN(num) ? 0 : num;
+    }
+
     setParams(prev => {
-      // Prevent infinite re-renders if the value hasn't actually changed
-      if (prev[key] === value) return prev;
-      return { ...prev, [key]: value };
+      if (prev[key] === safeValue) return prev;
+      return { ...prev, [key]: safeValue };
     });
   };
 
   const resetToDefaults = () => {
     setParams({
-        shape: 'plate',
-        a: 100,
-        l: 300,
-        w: 200,
-        t: 20,
-        d: 100,
-        h: 150,
-        safetyFactor: 1.2,
-        riserOverrideFactor: 1.0,
-        density: 7.85,
-        costPerKg: 60,
-        isCustomMaterial: false
+      shape: 'plate',
+      l: 300,
+      w: 200,
+      t: 20,
+      d: 100,
+      h: 150,
+      thickestSection: 20,
+      thinnestSection: 20,
+      alloy: 'carbonSteel',
+      pouringTemperature: 1550,
+      moldType: 'greenSand',
+      orientation: 'horizontal',
+      riserType: 'blind',
+      neckDiameter: 0,
+      neckLength: 0,
+      useChills: false,
+      chillType: 'external',
+      qualityClass: 'industrial',
+      riserOverrideFactor: 1.0,
+      shrinkageAllowance: 2.5,
+      machiningAllowance: 3.0,
+      draftAllowance: 1.0
     });
   };
 
@@ -392,212 +588,258 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
           
           {/* Left Column: Input Controls */}
           <aside className="border-r border-zinc-800 p-4 space-y-6 bg-zinc-950/50 overflow-y-auto print:hidden">
-            <div className="space-y-3">
-              <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Casting Geometry</label>
-              <div className="flex gap-1 p-1 bg-zinc-900 rounded-lg border border-zinc-800">
-                {(['plate', 'cylinder', 'cube'] as ShapeType[]).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => handleInputChange('shape', s)}
-                    className={cn(
-                      "flex-1 py-1.5 text-[11px] font-medium transition-all rounded",
-                      params.shape === s ? "bg-zinc-800 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-400"
-                    )}
-                  >
-                    {s.charAt(0).toUpperCase() + s.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
+            
+            {/* SECTION 1: CASTING GEOMETRY */}
+            <div className="space-y-4">
+              <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-zinc-800 pb-1">
+                 1. Casting Geometry
+              </label>
+              <Select value={params.shape} onValueChange={(v) => handleInputChange('shape', v)}>
+                <SelectTrigger className="h-8 bg-zinc-900 border-zinc-800 text-xs text-white">
+                  <SelectValue placeholder="Select Shape" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-300">
+                  <SelectItem value="plate">Plate</SelectItem>
+                  <SelectItem value="cylinder">Cylindrical</SelectItem>
+                  <SelectItem value="block">Block</SelectItem>
+                  <SelectItem value="ribbedPlate">Ribbed Plate</SelectItem>
+                  <SelectItem value="bossedCasting">Bossed Casting</SelectItem>
+                  <SelectItem value="complexJunction">Complex Junction</SelectItem>
+                </SelectContent>
+              </Select>
 
-            <div className="space-y-4 bg-zinc-900/50 p-3 border border-zinc-800 rounded-lg">
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={params.shape}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 10 }}
-                  className="space-y-4"
-                >
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="material" className="text-[10px] text-zinc-500 uppercase">Material</Label>
-                      <Select 
-                        value={params.isCustomMaterial ? "custom" : `${params.density}-${params.costPerKg}`} 
-                        onValueChange={(val) => {
-                          if (val === 'custom') {
-                            setParams(prev => ({ ...prev, isCustomMaterial: true }));
-                          } else {
-                            const [d, c] = val.split('-');
-                            setParams(prev => ({ ...prev, isCustomMaterial: false, density: parseFloat(d), costPerKg: parseFloat(c) }));
-                          }
-                        }}>
-                        <SelectTrigger className="h-9 bg-zinc-950 border-zinc-800 text-zinc-200 font-mono text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-zinc-950 border-zinc-800 text-zinc-200">
-                          <SelectItem value="7.85-60">Carbon Steel (7850 kg/m³, ₹60/kg)</SelectItem>
-                          <SelectItem value="7.2-120">Gray Iron (7200 kg/m³, ₹120/kg)</SelectItem>
-                          <SelectItem value="2.7-250">Aluminum (2700 kg/m³, ₹250/kg)</SelectItem>
-                          <SelectItem value="8.96-750">Copper (8960 kg/m³, ₹750/kg)</SelectItem>
-                          <SelectItem value="custom">Custom...</SelectItem>
-                        </SelectContent>
-                      </Select>
+              <div className="grid grid-cols-2 gap-3 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50">
+                {params.shape !== 'cylinder' && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-zinc-500 uppercase">Length (mm)</label>
+                      <Input value={params.l} onChange={(e) => handleInputChange('l', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
                     </div>
-
-                    {params.isCustomMaterial && (
-                      <div className="space-y-4 text-xs border-l-2 border-emerald-500 pl-3 ml-1 animate-in fade-in slide-in-from-left-2 pb-1">
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center text-zinc-400">
-                            <span>Custom Density (g/cm³)</span>
-                          </div>
-                          <Input 
-                            type="number" 
-                            step="0.01" 
-                            min="0.1"
-                            value={params.density}
-                            onChange={(e) => handleInputChange('density', parseFloat(e.target.value) || 0.1)}
-                            className="h-8 bg-zinc-950 border-zinc-800 text-zinc-200 font-mono text-xs"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center text-zinc-400">
-                            <span>Cost per kg (₹/kg)</span>
-                          </div>
-                          <Input 
-                            type="number" 
-                            step="0.01" 
-                            min="0"
-                            value={params.costPerKg}
-                            onChange={(e) => handleInputChange('costPerKg', parseFloat(e.target.value) || 0)}
-                            className="h-8 bg-zinc-950 border-zinc-800 text-zinc-200 font-mono text-xs"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {params.shape === 'cube' && (
-                    <div className="space-y-2 text-xs">
-                      <div className="flex justify-between items-center text-zinc-400">
-                        <span>Side Length (a)</span>
-                        <span className="font-mono text-zinc-200">{params.a?.toFixed(1)} mm</span>
-                      </div>
-                      <Slider 
-                        value={params.a} 
-                        min={10} max={500} step={1} 
-                        indicatorClassName="bg-emerald-500"
-                        onValueChange={(v) => handleInputChange('a', Array.isArray(v) ? v[0] : v)} 
-                      />
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-zinc-500 uppercase">Width (mm)</label>
+                      <Input value={params.w} onChange={(e) => handleInputChange('w', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
                     </div>
-                  )}
-                  {params.shape === 'plate' && (
-                    <>
-                      <div className="space-y-2 text-xs">
-                        <div className="flex justify-between items-center text-zinc-400">
-                          <span>Length (L)</span>
-                          <span className="font-mono text-zinc-200">{params.l?.toFixed(1)} mm</span>
-                        </div>
-                        <Slider 
-                          value={params.l} min={50} max={1000} step={1} 
-                          indicatorClassName="bg-emerald-500"
-                          onValueChange={(v) => handleInputChange('l', Array.isArray(v) ? v[0] : v)} 
-                        />
-                      </div>
-                      <div className="space-y-2 text-xs">
-                        <div className="flex justify-between items-center text-zinc-400">
-                          <span>Width (W)</span>
-                          <span className="font-mono text-zinc-200">{params.w?.toFixed(1)} mm</span>
-                        </div>
-                        <Slider 
-                          value={params.w} min={50} max={1000} step={1} 
-                          indicatorClassName="bg-emerald-500"
-                          onValueChange={(v) => handleInputChange('w', Array.isArray(v) ? v[0] : v)} 
-                        />
-                      </div>
-                      <div className="space-y-2 text-xs">
-                        <div className="flex justify-between items-center text-zinc-400">
-                          <span>Thickness (T)</span>
-                          <span className="font-mono text-zinc-200">{params.t?.toFixed(1)} mm</span>
-                        </div>
-                        <Slider 
-                          value={params.t} min={5} max={200} step={1} 
-                          indicatorClassName="bg-emerald-500"
-                          onValueChange={(v) => handleInputChange('t', Array.isArray(v) ? v[0] : v)} 
-                        />
-                      </div>
-                    </>
-                  )}
-                  {params.shape === 'cylinder' && (
-                    <>
-                      <div className="space-y-2 text-xs">
-                        <div className="flex justify-between items-center text-zinc-400">
-                          <span>Diameter (D)</span>
-                          <span className="font-mono text-zinc-200">{params.d?.toFixed(1)} mm</span>
-                        </div>
-                        <Slider 
-                          value={params.d} min={10} max={500} step={1} 
-                          indicatorClassName="bg-emerald-500"
-                          onValueChange={(v) => handleInputChange('d', Array.isArray(v) ? v[0] : v)} 
-                        />
-                      </div>
-                      <div className="space-y-2 text-xs">
-                        <div className="flex justify-between items-center text-zinc-400">
-                          <span>Height (H)</span>
-                          <span className="font-mono text-zinc-200">{params.h?.toFixed(1)} mm</span>
-                        </div>
-                        <Slider 
-                          value={params.h} min={10} max={1000} step={1} 
-                          indicatorClassName="bg-emerald-500"
-                          onValueChange={(v) => handleInputChange('h', Array.isArray(v) ? v[0] : v)} 
-                        />
-                      </div>
-                    </>
-                  )}
-                </motion.div>
-              </AnimatePresence>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              <div className="flex justify-between items-center">
-                <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Safety Factor</label>
-                <span className="text-xs text-emerald-400 font-mono tracking-tighter">{params.safetyFactor?.toFixed(2)}x</span>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-zinc-500 uppercase">Avg Thick (mm)</label>
+                      <Input value={params.t} onChange={(e) => handleInputChange('t', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
+                    </div>
+                  </>
+                )}
+                {params.shape === 'cylinder' && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-zinc-500 uppercase">Diameter (mm)</label>
+                      <Input value={params.d} onChange={(e) => handleInputChange('d', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-zinc-500 uppercase">Height (mm)</label>
+                      <Input value={params.h} onChange={(e) => handleInputChange('h', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
+                    </div>
+                  </>
+                )}
               </div>
-              <Slider 
-                value={params.safetyFactor} min={1.0} max={1.5} step={0.01} 
-                indicatorClassName="bg-emerald-500"
-                onValueChange={(val) => handleInputChange('safetyFactor', Array.isArray(val) ? val[0] : val)} 
-                className="accent-emerald-500" 
-              />
-            </div>
 
-            <div className="pt-4 space-y-3 border-t border-zinc-800">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-1.5">
-                  <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Riser D-Override</label>
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <span className="text-zinc-600 cursor-help text-[10px]">ⓘ</span>
-                    </TooltipTrigger>
-                    <TooltipContent className="bg-zinc-900 border-zinc-800 text-[10px] max-w-[200px]">
-                      Manually scale the riser diameter predicted by the Modulus Method.
-                    </TooltipContent>
-                  </Tooltip>
+              <div className="grid grid-cols-2 gap-3 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50">
+                <div className="space-y-1">
+                   <label className="text-[10px] text-zinc-500 uppercase leading-tight">Thickest (mm)</label>
+                   <Input value={params.thickestSection} onChange={(e) => handleInputChange('thickestSection', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
                 </div>
-                <span className="text-xs font-mono text-zinc-300">{Math.round(params.riserOverrideFactor * 100)}%</span>
+                <div className="space-y-1">
+                   <label className="text-[10px] text-zinc-500 uppercase leading-tight">Thinnest (mm)</label>
+                   <Input value={params.thinnestSection} onChange={(e) => handleInputChange('thinnestSection', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
+                </div>
               </div>
-              <Slider 
-                value={params.riserOverrideFactor} min={0.5} max={2.0} step={0.01} 
-                indicatorClassName={cn(
-                  params.riserOverrideFactor < 1.2 ? "bg-emerald-500" :
-                  params.riserOverrideFactor < 1.6 ? "bg-yellow-500" : "bg-red-500"
-                )}
-                thumbClassName={cn(
-                  params.riserOverrideFactor < 1.2 ? "border-emerald-500" :
-                  params.riserOverrideFactor < 1.6 ? "border-yellow-500" : "border-red-500"
-                )}
-                onValueChange={(val) => handleInputChange('riserOverrideFactor', Array.isArray(val) ? val[0] : val)} 
-              />
+            </div>
+
+            {/* SECTION 2: ALLOY DATA */}
+            <div className="space-y-4">
+              <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-zinc-800 pb-1">
+                 2. Alloy Data
+              </label>
+              <Select value={params.alloy} onValueChange={(v) => handleInputChange('alloy', v)}>
+                <SelectTrigger className="h-8 bg-zinc-900 border-zinc-800 text-xs text-white">
+                  <SelectValue placeholder="Select Alloy" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-300">
+                  {Object.entries(ALLOY_DATA).map(([key, data]) => (
+                    <SelectItem key={key} value={key}>{data.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* SECTION 3 & 4: PROCESS CONDITIONS */}
+            <div className="space-y-4">
+              <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-zinc-800 pb-1">
+                 3. Process Conditions
+              </label>
+              <div className="space-y-2">
+                 <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-zinc-500 uppercase tracking-tighter">Pouring Temp (°C)</span>
+                    <span className="font-mono text-emerald-400">{params.pouringTemperature}°C</span>
+                 </div>
+                 <Slider 
+                    value={[params.pouringTemperature]} min={500} max={1800} step={10} 
+                    indicatorClassName="bg-emerald-500"
+                    onValueChange={(v) => handleInputChange('pouringTemperature', v)} 
+                 />
+                 <div className="text-[9px] text-zinc-500 text-right">Default: {ALLOY_DATA[params.alloy].defaultTemp}°C</div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase">Mold Type</label>
+                <Select value={params.moldType} onValueChange={(v) => handleInputChange('moldType', v)}>
+                  <SelectTrigger className="h-8 bg-zinc-900 border-zinc-800 text-xs text-white">
+                    <SelectValue placeholder="Select Mold Type" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-300">
+                    <SelectItem value="greenSand">Green Sand</SelectItem>
+                    <SelectItem value="resinSand">Resin Sand</SelectItem>
+                    <SelectItem value="shellMold">Shell Mold</SelectItem>
+                    <SelectItem value="investment">Investment Mold</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase">Orientation</label>
+                <Select value={params.orientation} onValueChange={(v) => handleInputChange('orientation', v)}>
+                  <SelectTrigger className="h-8 bg-zinc-900 border-zinc-800 text-xs text-white">
+                    <SelectValue placeholder="Select Orientation" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-300">
+                    <SelectItem value="horizontal">Horizontal</SelectItem>
+                    <SelectItem value="vertical">Vertical</SelectItem>
+                    <SelectItem value="inclined">Inclined</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* SECTION 6: RISER SETTINGS */}
+            <div className="space-y-4">
+              <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-zinc-800 pb-1">
+                 4. Riser Settings
+              </label>
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase">Riser Type</label>
+                <Select value={params.riserType} onValueChange={(v) => handleInputChange('riserType', v)}>
+                  <SelectTrigger className="h-8 bg-zinc-900 border-zinc-800 text-xs text-white">
+                    <SelectValue placeholder="Select Riser Type" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-300">
+                    <SelectItem value="open">Open</SelectItem>
+                    <SelectItem value="blind">Blind</SelectItem>
+                    <SelectItem value="side">Side</SelectItem>
+                    <SelectItem value="top">Top</SelectItem>
+                    <SelectItem value="insulated">Insulated</SelectItem>
+                    <SelectItem value="exothermic">Exothermic</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-3 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50">
+                <div className="space-y-1">
+                   <label className="text-[10px] text-zinc-500 uppercase leading-tight">Neck Dia (mm)</label>
+                   <Input placeholder="Auto" value={params.neckDiameter || ''} onChange={(e) => handleInputChange('neckDiameter', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
+                </div>
+                <div className="space-y-1">
+                   <label className="text-[10px] text-zinc-500 uppercase leading-tight">Neck Len (mm)</label>
+                   <Input placeholder="Auto" value={params.neckLength || ''} onChange={(e) => handleInputChange('neckLength', e.target.value)} className="h-7 bg-zinc-950 border-zinc-800 text-xs font-mono" />
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 10 & 11: QUALITY & ASSISTANCE */}
+            <div className="space-y-4">
+              <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-zinc-800 pb-1">
+                 5. Quality & Feeding
+              </label>
+              <div className="flex items-center justify-between bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50">
+                 <label className="text-[11px] font-semibold text-zinc-300">Use Chills</label>
+                 <Switch checked={params.useChills} onCheckedChange={(v) => handleInputChange('useChills', v)} />
+              </div>
+              {params.useChills && (
+                <div className="space-y-2">
+                  <label className="text-[10px] text-zinc-500 uppercase">Chill Type</label>
+                  <Select value={params.chillType} onValueChange={(v) => handleInputChange('chillType', v)}>
+                    <SelectTrigger className="h-8 bg-zinc-900 border-zinc-800 text-xs text-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-300">
+                      <SelectItem value="external">External Chill</SelectItem>
+                      <SelectItem value="internal">Internal Chill</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase">Quality Class</label>
+                <Select value={params.qualityClass} onValueChange={(v) => handleInputChange('qualityClass', v)}>
+                  <SelectTrigger className="h-8 bg-zinc-900 border-zinc-800 text-xs text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-300">
+                    <SelectItem value="general">General</SelectItem>
+                    <SelectItem value="industrial">Industrial</SelectItem>
+                    <SelectItem value="automotive">Automotive</SelectItem>
+                    <SelectItem value="aerospace">Aerospace</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 pt-2 border-t border-zinc-800">
+                  <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-zinc-500 uppercase tracking-tighter">Riser Scale Override</span>
+                    <span className="font-mono text-zinc-300">{Math.round(params.riserOverrideFactor * 100)}%</span>
+                  </div>
+                  <Slider 
+                    value={[params.riserOverrideFactor]} min={0.5} max={2.0} step={0.01} 
+                    indicatorClassName="bg-zinc-500"
+                    onValueChange={(v) => handleInputChange('riserOverrideFactor', v)} 
+                  />
+              </div>
+            </div>
+
+            {/* Pattern Allowances */}
+            <div className="pt-2 space-y-4">
+              <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-zinc-800 pb-1">
+                6. Pattern Allowances
+              </label>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-zinc-500 uppercase tracking-tighter">Shrinkage (%)</span>
+                    <span className="font-mono text-emerald-400">{params.shrinkageAllowance?.toFixed(1)}%</span>
+                  </div>
+                  <Slider 
+                    value={[params.shrinkageAllowance || 0]} min={0} max={5} step={0.1} 
+                    indicatorClassName="bg-emerald-500"
+                    onValueChange={(v) => handleInputChange('shrinkageAllowance', v)} 
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-zinc-500 uppercase tracking-tighter">Machining (mm)</span>
+                    <span className="font-mono text-emerald-400">+{params.machiningAllowance?.toFixed(1)} mm</span>
+                  </div>
+                  <Slider 
+                    value={[params.machiningAllowance || 0]} min={0} max={20} step={0.5} 
+                    indicatorClassName="bg-emerald-500"
+                    onValueChange={(v) => handleInputChange('machiningAllowance', v)} 
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-zinc-500 uppercase tracking-tighter">Draft Padding (mm)</span>
+                    <span className="font-mono text-emerald-400">+{params.draftAllowance?.toFixed(1)} mm</span>
+                  </div>
+                  <Slider 
+                    value={[params.draftAllowance || 0]} min={0} max={10} step={0.5} 
+                    indicatorClassName="bg-emerald-500"
+                    onValueChange={(v) => handleInputChange('draftAllowance', v)} 
+                  />
+                </div>
+              </div>
             </div>
           </aside>
 
@@ -708,8 +950,8 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
                 <div className="flex-1 relative bg-zinc-950 min-h-[300px]">
                    <div className="absolute inset-0 cursor-move">
                      <RiserSchematic3D 
-                        shape={params.shape}
-                        dims={{ a: params.a, l: params.l, w: params.w, t: params.t, d: params.d, h: params.h }}
+                        shape={(params.shape === 'block' ? 'cube' : params.shape === 'cylinder' ? 'cylinder' : 'plate') as any}
+                        dims={{ a: params.t, l: params.l, w: params.w, t: params.t, d: params.d, h: params.h }}
                         riserDia={designResults.riser.actualDiameter}
                         riserHeight={designResults.riser.actualHeight}
                         isBlind={designResults.recommendedRiserType === 'Blind Riser'}
@@ -786,7 +1028,7 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <p className="font-mono text-sm text-zinc-200">{((designResults.casting.volume + designResults.riser.actualVolume) * params.density / 1000)?.toFixed(2)} <span className="text-[10px] opacity-50">kg</span></p>
+                  <p className="font-mono text-sm text-zinc-200">{((designResults.casting.volume + designResults.riser.actualVolume) * ALLOY_DATA[params.alloy].density / 1000)?.toFixed(2)} <span className="text-[10px] opacity-50">kg</span></p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-[9px] text-emerald-500 uppercase tracking-widest font-bold mt-[2px]">Projected Yield</p>
@@ -832,14 +1074,52 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
               
             </div>
 
-            <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-4 border-b border-zinc-800 pb-2 flex items-center gap-2">
-               <Brain className="w-3 h-3 text-purple-500" /> AI Design Insights
-            </h3>
+            <div className="space-y-3 mb-6">
+              <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+                 <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest flex items-center justify-between mb-3 border-b border-zinc-800 pb-2">
+                    Engineering Health
+                    <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-blue-400">
+                      {designResults.health.toFixed(0)}/100
+                    </span>
+                 </h4>
+                 <div className="space-y-3">
+                   <div>
+                     <div className="flex justify-between text-[10px] text-zinc-500 mb-1 font-semibold">
+                       <span>Hotspot Risk Score</span>
+                       <span className={designResults.hotspotScore > 40 ? "text-red-400" : "text-emerald-400"}>{designResults.hotspotScore.toFixed(0)}</span>
+                     </div>
+                     <div className="h-1.5 w-full bg-zinc-950 rounded-full overflow-hidden">
+                       <div className={cn("h-full", designResults.hotspotScore > 40 ? "bg-red-500" : "bg-emerald-500")} style={{ width: `${Math.min(100, designResults.hotspotScore)}%` }} />
+                     </div>
+                   </div>
+                   
+                   <div>
+                     <div className="flex justify-between text-[10px] text-zinc-500 mb-1 font-semibold">
+                       <span>Riser Modulus Ratio</span>
+                       <span className={designResults.analysis.currentRatioSq >= 1.1 ? "text-emerald-400" : "text-amber-400"}>{Math.round(designResults.analysis.currentRatioSq * 100)}%</span>
+                     </div>
+                     <div className="h-1.5 w-full bg-zinc-950 rounded-full overflow-hidden">
+                       <div className={cn("h-full", designResults.analysis.currentRatioSq >= 1.1 ? "bg-emerald-500" : "bg-amber-500")} style={{ width: `${Math.min(100, designResults.analysis.currentRatioSq * 100 / 1.5)}%` }} />
+                     </div>
+                   </div>
+                 </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mb-4 border-b border-zinc-800 pb-2">
+              <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+                 <Brain className="w-3 h-3 text-purple-500" /> AI Design Insights
+              </h3>
+              <div className="text-[9px] text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
+                 <div className={cn("w-1.5 h-1.5 rounded-full", aiAnalysisStatus === 'Not Generated' ? 'bg-zinc-600' : aiAnalysisStatus === 'Cached' ? 'bg-blue-500' : 'bg-emerald-500')} />
+                 AI Status: {aiAnalysisStatus}
+              </div>
+            </div>
             <div className="space-y-3 mb-6">
               {isAILoading ? (
                 <div className="p-6 flex flex-col items-center justify-center gap-2 bg-zinc-900/50 border border-zinc-800 rounded-lg">
                   <Loader2 className="w-5 h-5 text-purple-500 animate-spin" />
-                  <span className="text-[10px] text-zinc-500 font-medium animate-pulse">Gemini Analysis...</span>
+                  <span className="text-[10px] text-zinc-500 font-medium animate-pulse">Analyzing casting design...</span>
                 </div>
               ) : aiInsights ? (
                 <motion.div 
@@ -847,28 +1127,57 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
                   animate={{ opacity: 1, y: 0 }}
                   className="space-y-2.5"
                 >
-                  <div className="bg-purple-500/5 border border-purple-500/20 p-2.5 rounded-lg">
-                    <p className="text-[9px] font-bold text-purple-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
-                      <AlertTriangle className="w-2.5 h-2.5" /> Risk Profile
+                  <div className="bg-purple-500/5 border border-purple-500/20 p-2.5 rounded-lg space-y-1">
+                    <p className="text-[9px] font-bold text-purple-400 uppercase tracking-widest flex items-center gap-1.5">
+                      <AlertTriangle className="w-2.5 h-2.5" /> Feeding Analysis
                     </p>
-                    <p className="text-[11px] text-zinc-300 leading-tight">{aiInsights.failureAnalysis}</p>
+                    <p className="text-[11px] text-zinc-300 leading-tight">{aiInsights.feedingAnalysis}</p>
                   </div>
-                  <div className="bg-blue-500/5 border border-blue-500/20 p-2.5 rounded-lg">
-                    <p className="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
-                      <Sparkles className="w-2.5 h-2.5" /> Strategic Advice
+                  <div className="bg-red-500/5 border border-red-500/20 p-2.5 rounded-lg space-y-1">
+                    <p className="text-[9px] font-bold text-red-400 uppercase tracking-widest flex items-center gap-1.5">
+                      <Flame className="w-2.5 h-2.5" /> Defect Prediction
                     </p>
-                    <p className="text-[11px] text-zinc-300 leading-tight">{aiInsights.designAdvice}</p>
+                    <p className="text-[11px] text-zinc-300 leading-tight">{aiInsights.defectPrediction}</p>
                   </div>
-                  <div className="bg-emerald-500/5 border border-emerald-500/20 p-2.5 rounded-lg">
-                    <p className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
-                      <CheckCircle2 className="w-2.5 h-2.5" /> Riser Guidance
+                  <div className="bg-blue-500/5 border border-blue-500/20 p-2.5 rounded-lg space-y-1">
+                    <p className="text-[9px] font-bold text-blue-400 uppercase tracking-widest flex items-center gap-1.5">
+                      <Activity className="w-2.5 h-2.5" /> Cost Impact
                     </p>
-                    <p className="text-[11px] text-zinc-300 leading-tight">{aiInsights.recommendation}</p>
+                    <p className="text-[11px] text-zinc-300 leading-tight">{aiInsights.costImpact}</p>
                   </div>
+                  <div className="bg-emerald-500/5 border border-emerald-500/20 p-2.5 rounded-lg space-y-1">
+                    <p className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+                      <CheckCircle2 className="w-2.5 h-2.5" /> Recommendations
+                    </p>
+                    <ul className="list-disc pl-3 mt-1 space-y-1">
+                       {aiInsights.recommendations?.map((r, i) => (
+                           <li key={i} className="text-[11px] text-zinc-300 leading-tight">{r}</li>
+                       ))}
+                    </ul>
+                  </div>
+                  
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full text-xs mt-2 border-zinc-800 bg-zinc-950 hover:bg-zinc-900"
+                    onClick={() => generateAIReview(true)}
+                  >
+                     <Brain className="w-3 h-3 mr-2 text-purple-500" />
+                     Regenerate AI Review
+                  </Button>
                 </motion.div>
               ) : (
-                <div className="p-4 text-center text-[10px] text-zinc-600 border border-dashed border-zinc-800 rounded-lg">
-                  Adjust parameters to trigger AI insights
+                <div className="p-4 flex flex-col items-center justify-center gap-3 text-center text-[10px] text-zinc-500 border border-dashed border-zinc-800 rounded-lg bg-zinc-900/30">
+                  <p>AI Engineering Review not generated.</p>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="text-xs border-zinc-800 bg-zinc-950 hover:bg-zinc-900"
+                    onClick={() => generateAIReview(false)}
+                  >
+                     <Brain className="w-3 h-3 mr-2 text-purple-500" />
+                     Generate AI Engineering Review
+                  </Button>
                 </div>
               )}
             </div>
@@ -1026,7 +1335,17 @@ Return ONLY JSON with keys: failureAnalysis, designAdvice, recommendation.`;
                 </div>
 
                 <div>
-                  <h3 className="font-bold text-zinc-100 uppercase tracking-widest text-xs mb-2 border-b border-zinc-800 pb-1">3. Decision Logic</h3>
+                  <h3 className="font-bold text-zinc-100 uppercase tracking-widest text-xs mb-2 border-b border-zinc-800 pb-1">3. Pattern Allowances</h3>
+                  <p className="mb-2 text-xs">Geometric dimensions are adjusted to create the <strong>Pattern</strong>, ensuring the final casting meets desired specs after cooling and cleanup:</p>
+                  <ul className="list-disc pl-5 space-y-1 text-xs text-zinc-400">
+                    <li><strong>Shrinkage:</strong> Compensates for liquid-to-solid contraction. Carbon steel typically requires ~2%.</li>
+                    <li><strong>Machining:</strong> Extra material provided on surfaces that require high-precision finishing.</li>
+                    <li><strong>Draft:</strong> Taper added to vertical surfaces to allow the pattern to be removed from the sand mold without damage.</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 className="font-bold text-zinc-100 uppercase tracking-widest text-xs mb-2 border-b border-zinc-800 pb-1">4. Decision Logic</h3>
                   <ul className="list-disc pl-5 space-y-1.5 text-xs text-zinc-400">
                     <li><strong className="text-emerald-400">PASS (Safe):</strong> M<sub>r</sub>² &gt; 1.1 × M<sub>c</sub>². The thermal mass strongly favors the riser.</li>
                     <li><strong className="text-yellow-400">BORDERLINE:</strong> M<sub>c</sub>² ≤ M<sub>r</sub>² ≤ 1.1 × M<sub>c</sub>². Theoretical sufficiency, but risky under real-world fluctuations.</li>
